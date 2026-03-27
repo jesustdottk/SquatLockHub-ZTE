@@ -1,0 +1,23 @@
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos temporales de Editores
+*.swp
+*~
+.vscode/
+.idea/
+*.log
+
+# Archivos de empaquetado y build (Opcional, pero recomendado si quieres que otros los generen)
+# build/*.zip
+# (Los dejamos comentados si quieres que el .zip actual sea el "oficial" del repo)
+
+# Archivos de log de JS (Si usas depuración local)
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos de configuración locales de Git
+.gitignore_global
