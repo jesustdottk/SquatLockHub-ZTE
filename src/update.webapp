@@ -1,0 +1,13 @@
+{
+  "description": "45min Work / 10 Squats Lock",
+  "developer": {
+    "name": "dammgo labs",
+    "url": "https://github.com/jesustdottk"
+  },
+  "icons": {
+    "128": "/icons/icon-128.png"
+  },
+  "launch_path": "/index.html",
+  "name": "SquatLock",
+  "package_path": "/application.zip"
+}
