@@ -1,0 +1,10 @@
+{
+  "name": "Squat Lab",
+  "description": "ZTE Motion Telemetry",
+  "launch_path": "/index.html",
+  "developer": { "name": "dammgo labs", "url": "https://github.com/jesustdottk" },
+  "permissions": {
+    "vibration": { "description": "Haptic feedback for rep count" }
+  },
+  "type": "privileged"
+}

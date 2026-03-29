@@ -7,6 +7,7 @@
     <title>SquatLock</title>
 </head>
 <body class="theme-obsidian">
+    <div id="stealth-overlay" class="hidden"></div>
     <div id="app">
         <header>
             <h1 id="status-title">WORK MODE</h1>
@@ -18,13 +19,22 @@
                 <p>SQUATS REMAINING</p>
                 <div id="count">10</div>
             </div>
-            <div id="calibration-info" class="small">Stay Still...</div>
+            <div id="calibration-info" class="small hidden">HOLD STILL AT CHEST...</div>
+            <div id="flip-hint" class="small">FLIP DOWN TO START</div>
         </main>
 
         <footer>
             <button id="main-btn">START SESSION</button>
+            <div id="version-tag">v2.1.0-FOCUS</div>
         </footer>
     </div>
+    <div id="lock-screen" class="hidden">
+        <div class="lock-content">
+            <h1>LOCKED</h1>
+            <p>DO 10 SQUATS TO CONTINUE</p>
+        </div>
+    </div>
+    <div id="debug-log" style="text-align:left; background:rgba(0,0,0,0.8); padding:5px; font-size:9px; height:60px; overflow-y:scroll; border-top:1px solid #333; position:fixed; bottom:0; left:0; width:100%; color:#00FF41;">[B2G Ready]</div>
     <script src="app.js"></script>
 </body>
 </html>

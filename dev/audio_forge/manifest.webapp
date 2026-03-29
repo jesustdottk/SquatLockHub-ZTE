@@ -1,0 +1,10 @@
+{
+  "name": "AF Forge",
+  "description": "ZTE Audio Diagnostics",
+  "launch_path": "/index.html",
+  "developer": { "name": "dammgo labs", "url": "https://github.com/jesustdottk" },
+  "permissions": {
+    "audio-channel-alarm": { "description": "Test alarm priority audio" }
+  },
+  "type": "privileged"
+}

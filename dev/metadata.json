@@ -1,0 +1,9 @@
+{
+  "id": "audioforge.gaiamobile.org",
+  "localId": 1070,
+  "installOrigin": "app://audioforge.gaiamobile.org",
+  "manifestURL": "app://audioforge.gaiamobile.org/manifest.webapp",
+  "origin": "app://audioforge.gaiamobile.org",
+  "installState": "installed",
+  "basePath": "/data/local/webapps"
+}

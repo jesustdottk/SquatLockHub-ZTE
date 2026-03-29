@@ -12,7 +12,13 @@
   "default_locale": "es",
   "permissions": {
     "vibration": { "description": "Alertas de tiempo y contador" },
-    "device-storage:sdcard": { "access": "readwrite", "description": "Guardar log de ejercicios" }
+    "device-storage:sdcard": { "access": "readwrite", "description": "Guardar log de ejercicios" },
+    "power": { "description": "Prevenir reposo durante la sesión de focus" },
+    "audio-channel-alarm": { "description": "Prioridad de audio para alarmas de sesión" },
+    "alarms": { "description": "Programar despertador del sistema para el temporizador" }
   },
+  "messages": [
+    { "alarm": "/index.html" }
+  ],
   "type": "privileged"
 }
