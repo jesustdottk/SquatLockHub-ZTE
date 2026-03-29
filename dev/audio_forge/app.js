@@ -1,7 +1,6 @@
-// Audio Forge Diagnostic App v1.3 - LEGACY GECKO 32
+// AUDIO FORGE v1.5 - HARD-LEGACY (MARIO TEST)
 var logEl = document.getElementById('console');
-var statusEl = document.getElementById('status');
-var intervalId = null;
+var marioInterval = null;
 
 function log(msg) {
     if (!logEl) return;
@@ -9,115 +8,110 @@ function log(msg) {
     div.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
-    console.log(msg);
 }
 
-// Catch-all for global errors
 window.onerror = function(msg, url, line) {
-    log("GLOBAL ERROR: " + msg + " (L:" + line + ")");
+    log("ERROR: " + msg + " (L:" + line + ")");
     return true;
 };
 
-log("v1.3 Inari Logic Initializing...");
+log("Initializing Laboratory v1.5...");
 
 var AudioContextClass = window.AudioContext || window.webkitAudioContext;
 var audioCtx = null;
 
-if (!AudioContextClass) {
-    log("FATAL ERROR: AudioContext NO SOPORTADO");
-} else {
+if (AudioContextClass) {
     try {
-        log("Iniciando AudioContext...");
         audioCtx = new AudioContextClass();
-        log("Detección de estado: " + (audioCtx.state || "Propiedad 'state' no existe (Legacy)"));
+        log("AudioContext Created OK.");
     } catch(e) {
-        log("Fallo crítico al crear AudioContext: " + e.message);
+        log("AudioContext FAILED: " + e.message);
     }
 }
 
-function stopAudio() {
-    log("Deteniendo secuencias...");
-    if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
-    }
-    statusEl.textContent = "Stopped (v1.3)";
-}
-
-function playTone(freq, duration, type, volume) {
+function playNote(freq, dur, type, gainValue) {
+    if (!audioCtx) return;
     try {
-        if (!audioCtx) return;
-        
         var osc = audioCtx.createOscillator();
         var gain = audioCtx.createGain();
-        
         osc.type = type || 'square';
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-        
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         
-        gain.gain.setValueAtTime(volume || 0.1, audioCtx.currentTime);
-        // LinearRamp es más seguro para Inari (B2G 2.0)
-        gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+        // Aumentamos los tiempos para evitar "mochos"
+        var startTime = audioCtx.currentTime;
+        var peak = gainValue || 0.1;
         
-        osc.start(0); // v1.1 usaba osc.start(), v1.3 fuerza el '0' por seguridad legacy
-        osc.stop(audioCtx.currentTime + duration);
+        gain.gain.setValueAtTime(0.0001, startTime);
+        gain.gain.linearRampToValueAtTime(peak, startTime + 0.02); // Ataque suave
+        gain.gain.linearRampToValueAtTime(0.0001, startTime + dur); // Relax largo
+        
+        osc.start(0);
+        osc.stop(startTime + dur);
     } catch(e) {
-        log("ERROR playTone: " + e.message);
+        log("Error playNote: " + e.message);
     }
 }
 
-// --- Vinculación de Eventos Manuales (Bypass HTML onclick) ---
-
-function handleSimple() {
-    log("Botón Simple Pulsado!");
-    statusEl.textContent = "Testing Simple...";
-    playTone(440, 1.0, 'square', 0.5);
-    log("Oscilador invocado (440Hz)");
+// MARIO MUSIC LIBRARY - v1.5 (Smoother timings)
+function playMarioStart() {
+    log("Playing MARIO START...");
+    var now = audioCtx.currentTime;
+    // E5, E5, silence, E5, silence, C5, E5, silence, G5, silence, G4
+    var notes = [659, 659, 0, 659, 0, 523, 659, 0, 783, 0, 392];
+    notes.forEach(function(f, i) {
+        if (f > 0) {
+            setTimeout(function() { playNote(f, 0.2, 'square', 0.1); }, i * 150);
+        }
+    });
 }
 
-function handleSiren() {
-    stopAudio();
-    log("Iniciando Sirena...");
-    statusEl.textContent = "Playing Siren...";
-    intervalId = setInterval(function() {
-        playTone(440, 0.4, 'sawtooth', 0.3);
-        setTimeout(function(){ playTone(880, 0.4, 'sawtooth', 0.3); }, 500);
-    }, 1000);
+function playMarioCastle() {
+    log("Playing BOWSER CASTLE...");
+    var notes = [130, 138, 146, 155, 164, 174, 185, 196];
+    notes.forEach(function(f, i) {
+        setTimeout(function() { playNote(f, 0.2, 'square', 0.2); }, i * 120);
+    });
 }
 
-function handleTriple() {
-    stopAudio();
-    log("Iniciando Triple Pulso...");
-    statusEl.textContent = "Playing Triple...";
-    intervalId = setInterval(function() {
-        playTone(1000, 0.1, 'square', 0.4);
-        setTimeout(function(){ playTone(1000, 0.1, 'square', 0.3); }, 150);
-        setTimeout(function(){ playTone(1000, 0.1, 'square', 0.2); }, 300);
-    }, 1500);
+function playMarioClear() {
+    log("Playing STAGE CLEAR...");
+    var notes = [392, 523, 659, 783, 1046, 1318, 1568, 1568, 1318, 1568];
+    notes.forEach(function(f, i) {
+        setTimeout(function() { playNote(f, 0.4, 'square', 0.1); }, i * 160);
+    });
 }
 
-function handleAlarm() {
-    stopAudio();
-    log("Iniciando Alarma Incesante...");
-    statusEl.textContent = "Playing Alarm...";
-    intervalId = setInterval(function() {
-        playTone(880, 0.2, 'square', 0.5);
-        setTimeout(function(){ playTone(440, 0.2, 'square', 0.5); }, 250);
-    }, 500);
+function stopEverything() {
+    log("🔴 STOP: Limpiando intervalos.");
+    if (marioInterval) clearInterval(marioInterval);
+    marioInterval = null;
+    // (Lamentablemente no hay easy stop for all active oscillators without a node list)
 }
 
-// Asignación de Listeners
+// BINDINGS
 try {
-    document.getElementById('btn-simple').addEventListener('click', handleSimple);
-    document.getElementById('btn-siren').addEventListener('click', handleSiren);
-    document.getElementById('btn-triple').addEventListener('click', handleTriple);
-    document.getElementById('btn-alarm').addEventListener('click', handleAlarm);
-    document.getElementById('btn-stop').addEventListener('click', stopAudio);
-    log("Listeners de eventos vinculados con éxito.");
+    document.getElementById('btn-beep').onclick = function() { playNote(440, 0.5); };
+    document.getElementById('btn-scale').onclick = function() {
+        [261, 293, 329, 349, 392, 440, 493, 523].forEach(function(f, i) {
+            setTimeout(function() { playNote(f, 0.3); }, i * 300);
+        });
+    };
+    document.getElementById('btn-start').onclick = playMarioStart;
+    document.getElementById('btn-castle').onclick = function() {
+        stopEverything();
+        playMarioCastle();
+        marioInterval = setInterval(playMarioCastle, 3000);
+    };
+    document.getElementById('btn-clear').onclick = function() {
+        stopEverything();
+        playMarioClear();
+    };
+    document.getElementById('stop').onclick = stopEverything;
+    log("Events bound OK.");
 } catch(e) {
-    log("Error al vincular listeners: " + e.message);
+    log("Bind Error: " + e.message);
 }
 
-log("App v1.3 de Diagnóstico LISTA.");
+log("Ready for 8-bit Sound Verification.");

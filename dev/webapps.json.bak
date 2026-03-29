@@ -821,17 +821,7 @@
     "basePath": "/data/local/webapps",
     "id": "squat.gaiamobile.org",
     "installState": "installed",
-    "name": "SquatLock",
-    "removable": true,
-    "role": "",
-    "installerAppId": 0,
-    "installerIsBrowser": false,
-    "storeId": "",
-    "storeVersion": 0,
-    "downloading": false,
-    "readyToApplyDownload": false,
-    "csp": "",
-    "redirects": null
+    "name": "SquatLock"
   },
   "audioforge.gaiamobile.org": {
     "origin": "app://audioforge.gaiamobile.org",
@@ -848,7 +838,7 @@
     "origin": "app://squatlab.gaiamobile.org",
     "installOrigin": "app://squatlab.gaiamobile.org",
     "manifestURL": "app://squatlab.gaiamobile.org/manifest.webapp",
-    "localId": 1069,
+    "localId": 1070,
     "appStatus": 3,
     "basePath": "/data/local/webapps",
     "id": "squatlab.gaiamobile.org",

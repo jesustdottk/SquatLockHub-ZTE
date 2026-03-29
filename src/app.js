@@ -1,12 +1,14 @@
-// ES5 Script for ZTE Open (Inari) - v2.3.0 PRECISE
 var state = 'IDLE'; // IDLE, WORK, ALARM, CALIBRATION, SQUAT, FINISH
 var timer = null;
-var secondsLeft = 45 * 60;
+var alarmInterval = null;
+var SESSION_DURATION = 5 * 60; // MODO PRUEBA: 5 Minutos (V3.1.1-BOWSER-FIX)
+var secondsLeft = SESSION_DURATION;
+var sessionEndTime = 0;
 var squatCount = 10;
 var motionState = 'STILL';
 var isFlipped = false;
 var calibrationCounter = 0;
-var sessionMetric = { start: 0, peak: 0, duration: 0 };
+var sessionMetric = { start: 0, peak: 0, duration: 0, target_time: 0 };
 
 var cpuWakeLock = null;
 var screenWakeLock = null;
@@ -41,7 +43,7 @@ var elCalib = document.getElementById('calibration-info');
 var elVersion = document.getElementById('version-tag');
 
 // Update version tag
-if (elVersion) elVersion.textContent = 'v2.4.0-SANE';
+if (elVersion) elVersion.textContent = 'v3.1.0-BOWSER';
 
 // WebAudio API for Complex Alarms (Gecko 32 Sane)
 var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -56,14 +58,46 @@ function playBeep(freq, dur, type, gainValue) {
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        gain.gain.setValueAtTime(gainValue || 0.1, audioCtx.currentTime);
-        // LinearRamp is more reliable on old B2G versions
-        gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+        
+        var startTime = audioCtx.currentTime;
+        var peak = gainValue || 0.1;
+        
+        gain.gain.setValueAtTime(0.0001, startTime);
+        gain.gain.linearRampToValueAtTime(peak, startTime + 0.02); // Smooth Attack
+        gain.gain.linearRampToValueAtTime(0.0001, startTime + dur); // Smooth Decay
+        
         osc.start(0);
-        osc.stop(audioCtx.currentTime + dur);
+        osc.stop(startTime + dur);
     } catch(e) {
         log("playBeep Error: " + e.message);
     }
+}
+
+// MARIO MUSIC LIBRARY - v3.0 (Validated in Lab)
+function playMarioStart() {
+    log("Playing MARIO START...");
+    var notes = [659, 659, 0, 659, 0, 523, 659, 0, 783, 0, 392];
+    notes.forEach(function(f, i) {
+        if (f > 0) {
+            setTimeout(function() { playBeep(f, 0.2, 'square', 0.1); }, i * 150);
+        }
+    });
+}
+
+function playMarioCastle() {
+    log("Playing BOWSER CASTLE...");
+    var notes = [130, 138, 146, 155, 164, 174, 185, 196];
+    notes.forEach(function(f, i) {
+        setTimeout(function() { playBeep(f, 0.2, 'square', 0.2); }, i * 120);
+    });
+}
+
+function playMarioStageClear() {
+    log("Playing STAGE CLEAR...");
+    var notes = [392, 523, 659, 783, 1046, 1318, 1568, 1568, 1318, 1568];
+    notes.forEach(function(f, i) {
+        setTimeout(function() { playBeep(f, 0.4, 'square', 0.1); }, i * 160);
+    });
 }
 
 // Alarm Siren: Ascending and Descending sequence
@@ -104,7 +138,7 @@ function setSystemAlarm() {
     if (!navigator.mozAlarms) return;
     cancelSystemAlarm();
     var now = new Date();
-    var future = new Date(now.getTime() + secondsLeft * 1000);
+    var future = new Date(sessionEndTime || (now.getTime() + secondsLeft * 1000));
     var request = navigator.mozAlarms.add(future, "ignoreTimezone", { timer: true });
     request.onsuccess = function () { currentAlarmId = this.result; };
 }
@@ -171,19 +205,32 @@ function logBioAtom() {
 
 function startWork() {
     state = 'WORK';
-    secondsLeft = 45 * 60;
+    secondsLeft = SESSION_DURATION; // CRITICAL RESET
     elTitle.textContent = 'WORK MODE';
     elLock.className = 'hidden';
     elCounter.className = 'hidden';
     elTimer.className = '';
     elBtn.style.display = 'none';
-    playBeep(440, 0.5);
+    
+    // Stop any persistent alarm
+    if (alarmInterval) clearInterval(alarmInterval);
+    alarmInterval = null;
+    
+    // Mario Start Theme
+    playMarioStart();
+
+    sessionEndTime = Date.now() + (secondsLeft * 1000);
+    log("Session End: " + new Date(sessionEndTime).toLocaleTimeString());
+    
+    // UI Refresh Instant
+    updateUI();
     
     if (timer) clearInterval(timer);
     timer = setInterval(function() {
         if (isFlipped) {
             requestWakeLock('cpu');
-            secondsLeft--;
+            var now = Date.now();
+            secondsLeft = Math.max(0, Math.ceil((sessionEndTime - now) / 1000));
             updateUI();
             if (secondsLeft <= 0) {
                 clearInterval(timer);
@@ -192,6 +239,8 @@ function startWork() {
         } else {
             releaseWakeLock('cpu');
             cancelSystemAlarm();
+            // Re-sync secondsLeft to not lose time while unflipped? 
+            // In SquatLock, un-flipping pauses. So we RE-CALCULATE sessionEndTime upon reflipping.
             updateUI(); 
         }
     }, 1000);
@@ -199,13 +248,18 @@ function startWork() {
 
 function triggerAlarm() {
     state = 'ALARM';
-    elTitle.textContent = 'TAKE DEVICE!';
+    elTitle.textContent = 'TIME EXPIRED!';
     elLock.className = '';
     elStealth.className = 'hidden'; 
     requestWakeLock('screen');
     requestWakeLock('cpu');
     navigator.vibrate([1000, 500, 1000, 500]);
-    playAlarmSequence();
+    
+    // Bowser Style Alarm
+    playMarioCastle();
+    
+    if (alarmInterval) clearInterval(alarmInterval);
+    alarmInterval = setInterval(playMarioCastle, 3000);
 }
 
 function startCalibration() {
@@ -213,7 +267,12 @@ function startCalibration() {
     calibrationCounter = 0;
     elTitle.textContent = 'CALIBRATING...';
     elCalib.className = 'small';
+    elLock.className = 'hidden'; 
+    
+    // NOT clearing alarmInterval here (Keep Bowser playing during effort)
+    
     playBeep(660, 0.2, 'sine');
+    log("Status: CALIBRATION. Lock Hidden.");
 }
 
 function startSquatMode() {
@@ -224,8 +283,10 @@ function startSquatMode() {
     elTitle.textContent = 'SQUAT LOCK';
     elCalib.className = 'small hidden';
     elCounter.className = '';
+    elLock.className = 'hidden'; // ASEGURAR DESBLOQUEO
     updateUI();
     playBeep(880, 0.5, 'square');
+    log("Status: SQUAT. Reps: 10");
 }
 
 function onMotion(e) {
@@ -237,6 +298,9 @@ function onMotion(e) {
     isFlipped = (a.z < -8.0);
 
     if (state === 'WORK' && isFlipped && !wasFlipped) {
+        // Paused time while UNFLIPPED needs to be added back to end time
+        sessionEndTime = Date.now() + (secondsLeft * 1000);
+        log("Resumed. Sync EndTime: " + new Date(sessionEndTime).toLocaleTimeString());
         setSystemAlarm();
     }
 
@@ -259,26 +323,32 @@ function onMotion(e) {
     if (state === 'SQUAT') {
         if (magnitude > sessionMetric.peak) sessionMetric.peak = magnitude;
         
-        // REFINED Chest-Hold Thresholds (v2.3)
-        if (motionState === 'STILL' && magnitude < 7.8) {
+        // REFINED Chest-Hold Thresholds (v2.5-SYNC from Lab)
+        if (motionState === 'STILL' && magnitude < 8.2) {
             motionState = 'DOWN';
-        } else if (motionState === 'DOWN' && magnitude > 11.5) {
+        } else if (motionState === 'DOWN' && magnitude > 10.8) {
             motionState = 'UP';
         } else if (motionState === 'UP' && magnitude > 8.5 && magnitude < 11.5) {
             motionState = 'STILL';
             squatCount--;
             navigator.vibrate(100);
             playBeep(523, 0.1, 'sine'); // C5 note for clear tick
+            log("Rep Detectada. Quedan: " + squatCount);
             updateUI();
             
             if (squatCount <= 0) {
+                // STOP BOWSER ALARM NOW
+                if (alarmInterval) clearInterval(alarmInterval);
+                alarmInterval = null;
+                
                 sessionMetric.duration = new Date().getTime() - sessionMetric.start;
                 state = 'FINISH';
                 elTitle.textContent = 'SQUATS DONE!';
                 elCounter.className = 'hidden';
                 elFlipHint.textContent = 'FLIP DOWN TO LOG & RESET';
                 elFlipHint.className = 'small';
-                playBeep(1046, 0.8, 'square'); // C6 note
+                // Mario Stage Clear Fanfare
+                playMarioStageClear();
             }
         }
     }
