@@ -1,7 +1,7 @@
 var state = 'IDLE'; // IDLE, WORK, ALARM, CALIBRATION, SQUAT, FINISH
 var timer = null;
 var alarmInterval = null;
-var SESSION_DURATION = 5 * 60; // MODO PRUEBA: 5 Minutos (V3.1.1-BOWSER-FIX)
+var SESSION_DURATION = 1 * 60; // MODO PRUEBA: 1 Minuto (V3.4.4-RESCUE)
 var secondsLeft = SESSION_DURATION;
 var sessionEndTime = 0;
 var squatCount = 10;
@@ -13,6 +13,7 @@ var sessionMetric = { start: 0, peak: 0, duration: 0, target_time: 0 };
 var cpuWakeLock = null;
 var screenWakeLock = null;
 var currentAlarmId = null;
+var baitEl = document.getElementById('alarm-channel-bait');
 var logEl = document.getElementById('debug-log');
 
 function log(msg) {
@@ -43,60 +44,64 @@ var elCalib = document.getElementById('calibration-info');
 var elVersion = document.getElementById('version-tag');
 
 // Update version tag
-if (elVersion) elVersion.textContent = 'v3.1.0-BOWSER';
+if (elVersion) elVersion.textContent = 'v3.4.4-RESCUE';
 
 // WebAudio API for Complex Alarms (Gecko 32 Sane)
 var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 log("AudioContext: " + (audioCtx ? "READY" : "FAILED"));
 
+// BRIDGE FOR BACKWARD COMPATIBILITY
 function playBeep(freq, dur, type, gainValue) {
+    if (typeof scheduleNote === 'function') {
+        scheduleNote(freq, 0, dur, type, gainValue);
+    }
+}
+
+// HARDWARE SCHEDULER (GAIA STYLE)
+function scheduleNote(freq, startOffset, dur, type, gainValue) {
     if (!audioCtx) return;
     try {
         var osc = audioCtx.createOscillator();
         var gain = audioCtx.createGain();
+        var now = audioCtx.currentTime;
         osc.type = type || 'square';
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(freq, now + startOffset);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         
-        var startTime = audioCtx.currentTime;
         var peak = gainValue || 0.1;
+        gain.gain.setValueAtTime(0.0001, now + startOffset);
+        gain.gain.linearRampToValueAtTime(peak, now + startOffset + 0.02);
+        gain.gain.linearRampToValueAtTime(0.0001, now + startOffset + dur);
         
-        gain.gain.setValueAtTime(0.0001, startTime);
-        gain.gain.linearRampToValueAtTime(peak, startTime + 0.02); // Smooth Attack
-        gain.gain.linearRampToValueAtTime(0.0001, startTime + dur); // Smooth Decay
-        
-        osc.start(0);
-        osc.stop(startTime + dur);
+        osc.start(now + startOffset);
+        osc.stop(now + startOffset + dur);
     } catch(e) {
-        log("playBeep Error: " + e.message);
+        log("Schedule Error: " + e.message);
     }
 }
 
-// MARIO MUSIC LIBRARY - v3.0 (Validated in Lab)
 function playMarioStart() {
-    log("Playing MARIO START...");
+    log("Playing MARIO START (HW)...");
     var notes = [659, 659, 0, 659, 0, 523, 659, 0, 783, 0, 392];
     notes.forEach(function(f, i) {
-        if (f > 0) {
-            setTimeout(function() { playBeep(f, 0.2, 'square', 0.1); }, i * 150);
-        }
+        if (f > 0) scheduleNote(f, i * 0.15, 0.2, 'square', 0.1);
     });
 }
 
 function playMarioCastle() {
-    log("Playing BOWSER CASTLE...");
+    log("Playing BOWSER CASTLE (HW)...");
     var notes = [130, 138, 146, 155, 164, 174, 185, 196];
     notes.forEach(function(f, i) {
-        setTimeout(function() { playBeep(f, 0.2, 'square', 0.2); }, i * 120);
+        scheduleNote(f, i * 0.12, 0.2, 'square', 0.2);
     });
 }
 
 function playMarioStageClear() {
-    log("Playing STAGE CLEAR...");
+    log("Playing STAGE CLEAR (HW)...");
     var notes = [392, 523, 659, 783, 1046, 1318, 1568, 1568, 1318, 1568];
     notes.forEach(function(f, i) {
-        setTimeout(function() { playBeep(f, 0.4, 'square', 0.1); }, i * 160);
+        scheduleNote(f, i * 0.16, 0.4, 'square', 0.1);
     });
 }
 
@@ -138,12 +143,20 @@ function setSystemAlarm() {
     if (!navigator.mozAlarms) return;
     cancelSystemAlarm();
     var now = new Date();
-    var future = new Date(sessionEndTime || (now.getTime() + secondsLeft * 1000));
+    var targetTime = sessionEndTime || (now.getTime() + secondsLeft * 1000);
+    
+    // PERSISTENCE: Save Target Time to Disk (Gaia Pattern)
+    localStorage.setItem('squat_alarm_time', targetTime);
+    localStorage.setItem('squat_state', state);
+    
+    var future = new Date(targetTime);
     var request = navigator.mozAlarms.add(future, "ignoreTimezone", { timer: true });
     request.onsuccess = function () { currentAlarmId = this.result; };
 }
 
 function cancelSystemAlarm() {
+    localStorage.removeItem('squat_alarm_time');
+    localStorage.removeItem('squat_state');
     if (navigator.mozAlarms && currentAlarmId) {
         navigator.mozAlarms.remove(currentAlarmId);
         currentAlarmId = null;
@@ -152,7 +165,9 @@ function cancelSystemAlarm() {
 
 if (navigator.mozSetMessageHandler) {
     navigator.mozSetMessageHandler('alarm', function (message) {
-        if (state === 'WORK') triggerAlarm();
+        log("System Message Received: ALARM");
+        // Gaia Force: Ignore internal state, if alarm message comes, we alarm.
+        triggerAlarm();
     });
 }
 
@@ -212,6 +227,10 @@ function startWork() {
     elTimer.className = '';
     elBtn.style.display = 'none';
     
+    // UI RECOVERY: Show the app container if it was hidden
+    var appContainer = document.getElementById('app');
+    if (appContainer) appContainer.className = '';
+    
     // Stop any persistent alarm
     if (alarmInterval) clearInterval(alarmInterval);
     alarmInterval = null;
@@ -247,15 +266,30 @@ function startWork() {
 }
 
 function triggerAlarm() {
+    log("ALARM TRIGGERED");
     state = 'ALARM';
+    localStorage.setItem('squat_state', 'ALARM');
+    
     elTitle.textContent = 'TIME EXPIRED!';
+    
+    // UI SECURITY: Hide the entire app container to prevent overlays
+    var appContainer = document.getElementById('app');
+    if (appContainer) appContainer.className = 'hidden';
+    
     elLock.className = '';
     elStealth.className = 'hidden'; 
+    
     requestWakeLock('screen');
     requestWakeLock('cpu');
-    navigator.vibrate([1000, 500, 1000, 500]);
     
-    // Bowser Style Alarm
+    if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500]);
+    
+    // GAIA TRICK: Use the hidden audio element to activate 'alarm' channel priority
+    if (baitEl && typeof baitEl.play === 'function') {
+        baitEl.play(); // Gecko 32: play() doesn't return a Promise, no .catch()!
+    }
+    
+    // Programmable Hardware Orchestra
     playMarioCastle();
     
     if (alarmInterval) clearInterval(alarmInterval);
@@ -369,6 +403,29 @@ elBtn.addEventListener('click', function() {
     if (state === 'IDLE') startWork();
 });
 
+// GAIA SURVIVOR LOGIC: Check for lost alarm on boot
+function checkPersistence() {
+    var storedTime = localStorage.getItem('squat_alarm_time');
+    var storedState = localStorage.getItem('squat_state');
+    
+    if (storedTime && storedState === 'WORK') {
+        var diff = parseInt(storedTime) - Date.now();
+        if (diff <= 0) {
+            log("Survivor: Alarm was due. Triggering NOW.");
+            triggerAlarm();
+        } else {
+            log("Survivor: Resuming session (" + Math.ceil(diff/1000) + "s left)");
+            sessionEndTime = parseInt(storedTime);
+            secondsLeft = Math.ceil(diff/1000);
+            startWork();
+        }
+    } else if (storedState === 'ALARM') {
+        log("Survivor: Recovered from CRASH during ALARM.");
+        triggerAlarm();
+    }
+}
+
 window.addEventListener('devicemotion', onMotion);
 log("System Boot Complete.");
+checkPersistence();
 updateUI();
