@@ -10,11 +10,16 @@ desktop.ini
 .idea/
 *.log
 
-# Archivos de empaquetado y build (Opcional, pero recomendado si quieres que otros los generen)
-# build/*.zip
-# (Los dejamos comentados si quieres que el .zip actual sea el "oficial" del repo)
+# Artefactos de Build (Generados automáticamente)
+/build/
+/dev/*.zip
+/dev/metadata.json
+/dev/webapps.json
+/dev/webapps.json.bak
+*.zip
+*.bak
 
-# Archivos de log de JS (Si usas depuración local)
+# Archivos de log de JS
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
