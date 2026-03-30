@@ -1,7 +1,7 @@
 var state = 'IDLE'; // IDLE, WORK, ALARM, CALIBRATION, SQUAT, FINISH
 var timer = null;
 var alarmInterval = null;
-var SESSION_DURATION = 1 * 60; // MODO PRUEBA: 1 Minuto (V3.5.0-RESCUE)
+var SESSION_DURATION = 45 * 60; // MODO PRODUCCIÓN: 45 Minutos (V3.6.1-GOLD)
 var secondsLeft = SESSION_DURATION;
 var sessionEndTime = 0;
 var squatCount = 10;
@@ -14,7 +14,7 @@ var cpuWakeLock = null;
 var screenWakeLock = null;
 var currentAlarmId = null;
 var baitEl = document.getElementById('alarm-channel-bait');
-var logEl = document.getElementById('debug-log');
+var logEl = document.getElementById('debug-log'); // Removed from HTML but logic handles null
 
 function log(msg) {
     if (!logEl) return;
@@ -32,7 +32,7 @@ window.onerror = function(msg, url, line) {
     return true;
 };
 
-log("SQUATLOCK v3.5.0-RESCUE Initializing...");
+log("SQUATLOCK v3.6.0-GOLD Initializing...");
 // Ensure app is visible at boot
 var appContainer = document.getElementById('app');
 if (appContainer) appContainer.className = '';
@@ -50,13 +50,13 @@ var elCalib = document.getElementById('calibration-info');
 var elVersion = document.getElementById('version-tag');
 
 // Update version tag
-if (elVersion) elVersion.textContent = 'v3.5.0-RESCUE';
+if (elVersion) elVersion.textContent = 'v3.6.1-GOLD';
 
-// FORCED MEMORY WIPE (Once per v3.5.0)
-if (localStorage.getItem('v3.5.0_wipe') !== 'done') {
+// FORCED MEMORY WIPE (Once per v3.6.1)
+if (localStorage.getItem('v3.6.1_wipe') !== 'done') {
     localStorage.clear();
-    localStorage.setItem('v3.5.0_wipe', 'done');
-    log("Memory wiped for stability.");
+    localStorage.setItem('v3.6.1_wipe', 'done');
+    log("Memory wiped for PRODUCTION stability.");
 }
 
 // WebAudio API for Complex Alarms (Gecko 32 Sane)
@@ -116,6 +116,12 @@ function playMarioStageClear() {
     notes.forEach(function(f, i) {
         scheduleNote(f, i * 0.16, 0.4, 'square', 0.1);
     });
+}
+
+function playMarioCoin() {
+    // Mario Coin: B5 (988Hz) then E6 (1319Hz)
+    scheduleNote(988, 0, 0.1, 'square', 0.1);
+    scheduleNote(1319, 0.1, 0.4, 'square', 0.1);
 }
 
 // Alarm Siren: Ascending and Descending sequence
@@ -394,7 +400,10 @@ function onMotion(e) {
             motionState = 'STILL';
             squatCount--;
             navigator.vibrate(100);
-            playBeep(523, 0.1, 'sine'); // C5 note for clear tick
+            
+            // MARIO COIN SOUND (V3.6.0-GOLD)
+            playMarioCoin();
+            
             log("Rep Detectada. Quedan: " + squatCount);
             updateUI();
             
