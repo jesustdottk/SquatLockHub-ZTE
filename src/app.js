@@ -1,7 +1,7 @@
 var state = 'IDLE'; // IDLE, WORK, ALARM, CALIBRATION, SQUAT, FINISH
 var timer = null;
 var alarmInterval = null;
-var SESSION_DURATION = 1 * 60; // MODO PRUEBA: 1 Minuto (V3.4.4-RESCUE)
+var SESSION_DURATION = 1 * 60; // MODO PRUEBA: 1 Minuto (V3.5.0-RESCUE)
 var secondsLeft = SESSION_DURATION;
 var sessionEndTime = 0;
 var squatCount = 10;
@@ -22,6 +22,9 @@ function log(msg) {
     div.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
+    
+    // Low-impact system log (captured by adb logcat)
+    console.log("[SQUATLOCK] " + msg);
 }
 
 window.onerror = function(msg, url, line) {
@@ -29,7 +32,10 @@ window.onerror = function(msg, url, line) {
     return true;
 };
 
-log("SQUATLOCK v2.4-SANE Initializing...");
+log("SQUATLOCK v3.5.0-RESCUE Initializing...");
+// Ensure app is visible at boot
+var appContainer = document.getElementById('app');
+if (appContainer) appContainer.className = '';
 
 // DOM Elements
 var elTitle = document.getElementById('status-title');
@@ -44,7 +50,14 @@ var elCalib = document.getElementById('calibration-info');
 var elVersion = document.getElementById('version-tag');
 
 // Update version tag
-if (elVersion) elVersion.textContent = 'v3.4.4-RESCUE';
+if (elVersion) elVersion.textContent = 'v3.5.0-RESCUE';
+
+// FORCED MEMORY WIPE (Once per v3.5.0)
+if (localStorage.getItem('v3.5.0_wipe') !== 'done') {
+    localStorage.clear();
+    localStorage.setItem('v3.5.0_wipe', 'done');
+    log("Memory wiped for stability.");
+}
 
 // WebAudio API for Complex Alarms (Gecko 32 Sane)
 var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -219,17 +232,25 @@ function logBioAtom() {
 }
 
 function startWork() {
+    log("Starting WORK session...");
     state = 'WORK';
-    secondsLeft = SESSION_DURATION; // CRITICAL RESET
+    
+    // Reset timer
+    secondsLeft = SESSION_DURATION;
+    sessionEndTime = Date.now() + (secondsLeft * 1000);
+    
+    // Register Hardware Alarm (MozAlarms)
+    setSystemAlarm();
+    
+    // UI RECOVERY (Critical Force)
+    var appContainer = document.getElementById('app');
+    if (appContainer) appContainer.className = '';
+    
     elTitle.textContent = 'WORK MODE';
     elLock.className = 'hidden';
     elCounter.className = 'hidden';
     elTimer.className = '';
     elBtn.style.display = 'none';
-    
-    // UI RECOVERY: Show the app container if it was hidden
-    var appContainer = document.getElementById('app');
-    if (appContainer) appContainer.className = '';
     
     // Stop any persistent alarm
     if (alarmInterval) clearInterval(alarmInterval);
@@ -257,9 +278,8 @@ function startWork() {
             }
         } else {
             releaseWakeLock('cpu');
-            cancelSystemAlarm();
-            // Re-sync secondsLeft to not lose time while unflipped? 
-            // In SquatLock, un-flipping pauses. So we RE-CALCULATE sessionEndTime upon reflipping.
+            // If user turns phone, they pause the count, 
+            // but we MUST recalculate end session time later.
             updateUI(); 
         }
     }, 1000);
@@ -300,7 +320,14 @@ function startCalibration() {
     state = 'CALIBRATION';
     calibrationCounter = 0;
     elTitle.textContent = 'CALIBRATING...';
+    
+    // UI RECOVERY (Critical Force)
+    var appContainer = document.getElementById('app');
+    if (appContainer) appContainer.className = '';
+    
     elCalib.className = 'small';
+    elCounter.className = 'hidden';
+    elTimer.className = 'hidden';
     elLock.className = 'hidden'; 
     
     // NOT clearing alarmInterval here (Keep Bowser playing during effort)
@@ -344,9 +371,10 @@ function onMotion(e) {
     }
 
     if (state === 'CALIBRATION') {
-        if (magnitude > 8.5 && magnitude < 11.5) {
+        // LOOSENED TOLERANCE for 2013 hardware noise (7.0 - 13.0)
+        if (magnitude > 7.0 && magnitude < 13.0) {
             calibrationCounter++;
-            if (calibrationCounter > 40) { // ~2 seconds for faster handoff
+            if (calibrationCounter > 20) { // ~1 second for fluid handoff
                 startSquatMode();
             }
         } else {
@@ -389,9 +417,19 @@ function onMotion(e) {
 
     if (state === 'FINISH' && isFlipped) {
         logBioAtom();
+        log("Goal Reached! Resetting per Cycle logic...");
+        localStorage.removeItem('squat_state');
+        localStorage.removeItem('squat_alarm_time');
+        
         releaseWakeLock('cpu');
         cancelSystemAlarm();
+        
+        // AUTO-CYCLE: Start next work session immediately
         startWork();
+        
+        // Ensure UI displays correctly for next cycle
+        var appContainer = document.getElementById('app');
+        if (appContainer) appContainer.className = '';
     }
     
     // Smooth background blinking for alarm
@@ -408,21 +446,46 @@ function checkPersistence() {
     var storedTime = localStorage.getItem('squat_alarm_time');
     var storedState = localStorage.getItem('squat_state');
     
-    if (storedTime && storedState === 'WORK') {
+    log("Persistence Check: Time=" + storedTime + " State=" + storedState);
+    
+    if (storedTime && storedState) {
         var diff = parseInt(storedTime) - Date.now();
-        if (diff <= 0) {
-            log("Survivor: Alarm was due. Triggering NOW.");
-            triggerAlarm();
-        } else {
-            log("Survivor: Resuming session (" + Math.ceil(diff/1000) + "s left)");
-            sessionEndTime = parseInt(storedTime);
-            secondsLeft = Math.ceil(diff/1000);
-            startWork();
+        var oneHour = 60 * 60 * 1000;
+        
+        // AUTO-RECOVERY: If session is too old (> 1 hour), wipe it.
+        if (Math.abs(diff) > oneHour) {
+            log("Ghost Session detected (> 1hr). Wiping...");
+            localStorage.clear();
+            return;
         }
-    } else if (storedState === 'ALARM') {
-        log("Survivor: Recovered from CRASH during ALARM.");
-        triggerAlarm();
+
+        if (storedState === 'WORK') {
+            if (diff <= 0) {
+                log("Survivor: Alarm was due. Triggering NOW.");
+                triggerAlarm();
+            } else {
+                log("Survivor: Resuming session (" + Math.ceil(diff/1000) + "s left)");
+                sessionEndTime = parseInt(storedTime);
+                secondsLeft = Math.ceil(diff/1000);
+                startWork();
+            }
+        } else if (storedState === 'ALARM') {
+            log("Survivor: Recovered from CRASH during ALARM.");
+            triggerAlarm();
+        }
+    } else {
+        log("No pending session found. IDLE.");
     }
+}
+
+// RESET BUTTON LISTENER
+var elReset = document.getElementById('reset-btn');
+if (elReset) {
+    elReset.addEventListener('click', function() {
+        log("MANUAL RESET TRIGGERED. Wiping LocalStorage...");
+        localStorage.clear();
+        location.reload();
+    });
 }
 
 window.addEventListener('devicemotion', onMotion);
