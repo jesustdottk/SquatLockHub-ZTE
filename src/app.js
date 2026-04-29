@@ -1,193 +1,140 @@
-var state = 'IDLE'; // IDLE, WORK, ALARM, CALIBRATION, SQUAT, FINISH
+// SQUATLOCK v3.9.0-GOLD (ANTI-DISTORTION & RAMPS)
+// ===============================================
+
+if (navigator.mozSetMessageHandler) {
+    navigator.mozSetMessageHandler('alarm', function (message) {
+        var lock = navigator.requestWakeLock ? navigator.requestWakeLock('cpu') : null;
+        log("WAKE SIGNAL");
+        if (typeof triggerAlarm === 'function') triggerAlarm();
+        else { localStorage.setItem('squat_state', 'ALARM'); location.reload(); }
+    });
+}
+
+var state = 'IDLE'; 
 var timer = null;
 var alarmInterval = null;
-var SESSION_DURATION = 45 * 60; // MODO PRODUCCIÓN: 45 Minutos (V3.6.1-GOLD)
+var SESSION_DURATION = 45 * 60; 
 var secondsLeft = SESSION_DURATION;
 var sessionEndTime = 0;
 var squatCount = 10;
 var motionState = 'STILL';
 var isFlipped = false;
 var calibrationCounter = 0;
-var sessionMetric = { start: 0, peak: 0, duration: 0, target_time: 0 };
 
 var cpuWakeLock = null;
 var screenWakeLock = null;
 var currentAlarmId = null;
 var baitEl = document.getElementById('alarm-channel-bait');
-var logEl = document.getElementById('debug-log'); // Removed from HTML but logic handles null
 
-function log(msg) {
-    if (!logEl) return;
-    var div = document.createElement('div');
-    div.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
-    
-    // Low-impact system log (captured by adb logcat)
-    console.log("[SQUATLOCK] " + msg);
-}
+function log(msg) { console.log("[SQUATLOCK] " + msg); }
 
-window.onerror = function(msg, url, line) {
-    log("CRASH: " + msg + " (L:" + line + ")");
-    return true;
-};
-
-log("SQUATLOCK v3.6.0-GOLD Initializing...");
-// Ensure app is visible at boot
-var appContainer = document.getElementById('app');
-if (appContainer) appContainer.className = '';
-
-// DOM Elements
 var elTitle = document.getElementById('status-title');
 var elTimer = document.getElementById('timer-display');
 var elCounter = document.getElementById('squat-counter');
 var elCount = document.getElementById('count');
-var elBtn = document.getElementById('main-btn');
 var elFlipHint = document.getElementById('flip-hint');
 var elStealth = document.getElementById('stealth-overlay');
 var elLock = document.getElementById('lock-screen');
 var elCalib = document.getElementById('calibration-info');
 var elVersion = document.getElementById('version-tag');
+var elBtn = document.getElementById('main-btn');
 
-// Update version tag
-if (elVersion) elVersion.textContent = 'v3.6.1-GOLD';
+if (elBtn && elBtn.parentNode) { elBtn.parentNode.removeChild(elBtn); }
+if (elVersion) elVersion.textContent = 'v3.9.0-GOLD';
 
-// FORCED MEMORY WIPE (Once per v3.6.1)
-if (localStorage.getItem('v3.6.1_wipe') !== 'done') {
-    localStorage.clear();
-    localStorage.setItem('v3.6.1_wipe', 'done');
-    log("Memory wiped for PRODUCTION stability.");
-}
-
-// WebAudio API for Complex Alarms (Gecko 32 Sane)
 var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-log("AudioContext: " + (audioCtx ? "READY" : "FAILED"));
 
-// BRIDGE FOR BACKWARD COMPATIBILITY
-function playBeep(freq, dur, type, gainValue) {
-    if (typeof scheduleNote === 'function') {
-        scheduleNote(freq, 0, dur, type, gainValue);
-    }
-}
-
-// HARDWARE SCHEDULER (GAIA STYLE)
-function scheduleNote(freq, startOffset, dur, type, gainValue) {
+// SECUENCIADOR ANTI-DISTORSIÓN: Usa rampas suaves para evitar "pops"
+function playSingleOscSequence(notes, durationPerNote, totalDuration, type) {
     if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     try {
+        var now = audioCtx.currentTime;
         var osc = audioCtx.createOscillator();
         var gain = audioCtx.createGain();
-        var now = audioCtx.currentTime;
         osc.type = type || 'square';
-        osc.frequency.setValueAtTime(freq, now + startOffset);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        
-        var peak = gainValue || 0.1;
-        gain.gain.setValueAtTime(0.0001, now + startOffset);
-        gain.gain.linearRampToValueAtTime(peak, now + startOffset + 0.02);
-        gain.gain.linearRampToValueAtTime(0.0001, now + startOffset + dur);
-        
-        osc.start(now + startOffset);
-        osc.stop(now + startOffset + dur);
-    } catch(e) {
-        log("Schedule Error: " + e.message);
-    }
+        osc.connect(gain); gain.connect(audioCtx.destination);
+
+        gain.gain.setValueAtTime(0.0001, now);
+
+        for (var i = 0; i < notes.length; i++) {
+            var noteStart = now + (i * durationPerNote);
+            var noteAttack = noteStart + 0.01; // 10ms de rampa de subida
+            var noteDecay = noteStart + (durationPerNote * 0.85); // Inicio de bajada
+            var noteEnd = noteStart + (durationPerNote * 0.95); // Fin de nota
+
+            if (notes[i] > 0) {
+                osc.frequency.setValueAtTime(notes[i], noteStart);
+                gain.gain.linearRampToValueAtTime(0.1, noteAttack); // Volumen moderado
+                gain.gain.setValueAtTime(0.1, noteDecay);
+                gain.gain.linearRampToValueAtTime(0.0001, noteEnd); // Rampa de bajada suave
+            }
+        }
+
+        osc.start(now);
+        osc.stop(now + totalDuration);
+    } catch (e) { log("Audio Error"); }
 }
 
 function playMarioStart() {
-    log("Playing MARIO START (HW)...");
     var notes = [659, 659, 0, 659, 0, 523, 659, 0, 783, 0, 392];
-    notes.forEach(function(f, i) {
-        if (f > 0) scheduleNote(f, i * 0.15, 0.2, 'square', 0.1);
-    });
+    playSingleOscSequence(notes, 0.14, 1.8, 'square');
 }
 
-function playMarioCastle() {
-    log("Playing BOWSER CASTLE (HW)...");
-    var notes = [130, 138, 146, 155, 164, 174, 185, 196];
-    notes.forEach(function(f, i) {
-        scheduleNote(f, i * 0.12, 0.2, 'square', 0.2);
-    });
+function playCastleSequence() {
+    var notes = [261, 277, 293, 311, 329, 349, 370, 392];
+    playSingleOscSequence(notes, 0.15, 1.2, 'square');
 }
 
 function playMarioStageClear() {
-    log("Playing STAGE CLEAR (HW)...");
     var notes = [392, 523, 659, 783, 1046, 1318, 1568, 1568, 1318, 1568];
-    notes.forEach(function(f, i) {
-        scheduleNote(f, i * 0.16, 0.4, 'square', 0.1);
-    });
+    playSingleOscSequence(notes, 0.12, 1.5, 'square');
 }
 
 function playMarioCoin() {
-    // Mario Coin: B5 (988Hz) then E6 (1319Hz)
-    scheduleNote(988, 0, 0.1, 'square', 0.1);
-    scheduleNote(1319, 0.1, 0.4, 'square', 0.1);
+    // Moneda: B5 (988Hz) corto, seguido de E6 (1319Hz) con rampa de salida
+    var notes = [988, 1319, 1319];
+    playSingleOscSequence(notes, 0.1, 0.4, 'square');
 }
 
-// Alarm Siren: Ascending and Descending sequence
-function playAlarmSequence() {
-    if (state !== 'ALARM') return;
-    
-    var now = audioCtx.currentTime;
-    [440, 660, 440, 880, 440, 660].forEach(function(f, i) {
-        playBeep(f, 0.5, 'sawtooth', 0.2);
-    });
-
-    // Repeat every 3 seconds while alarming
-    setTimeout(playAlarmSequence, 3000);
+function playBeep(freq, dur) {
+    if (!audioCtx) return;
+    var osc = audioCtx.createOscillator();
+    var gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    osc.start(); osc.stop(audioCtx.currentTime + dur);
 }
 
-// Power & System Persistence
 function requestWakeLock(type) {
-    if (type === 'cpu' && !cpuWakeLock) {
-        cpuWakeLock = navigator.requestWakeLock ? navigator.requestWakeLock('cpu') : null;
-    }
-    if (type === 'screen' && !screenWakeLock) {
-        screenWakeLock = navigator.requestWakeLock ? navigator.requestWakeLock('screen') : null;
-    }
+    if (type === 'cpu' && !cpuWakeLock) cpuWakeLock = navigator.requestWakeLock ? navigator.requestWakeLock('cpu') : null;
+    if (type === 'screen' && !screenWakeLock) screenWakeLock = navigator.requestWakeLock ? navigator.requestWakeLock('screen') : null;
 }
 
 function releaseWakeLock(type) {
-    if (type === 'cpu' && cpuWakeLock) {
-        cpuWakeLock.unlock();
-        cpuWakeLock = null;
-    }
-    if (type === 'screen' && screenWakeLock) {
-        screenWakeLock.unlock();
-        screenWakeLock = null;
-    }
+    if (type === 'cpu' && cpuWakeLock) { cpuWakeLock.unlock(); cpuWakeLock = null; }
+    if (type === 'screen' && screenWakeLock) { screenWakeLock.unlock(); screenWakeLock = null; }
 }
 
 function setSystemAlarm() {
     if (!navigator.mozAlarms) return;
     cancelSystemAlarm();
-    var now = new Date();
-    var targetTime = sessionEndTime || (now.getTime() + secondsLeft * 1000);
-    
-    // PERSISTENCE: Save Target Time to Disk (Gaia Pattern)
+    if (!isFlipped || state !== 'WORK') return;
+    var targetTime = sessionEndTime;
     localStorage.setItem('squat_alarm_time', targetTime);
     localStorage.setItem('squat_state', state);
-    
     var future = new Date(targetTime);
-    var request = navigator.mozAlarms.add(future, "ignoreTimezone", { timer: true });
-    request.onsuccess = function () { currentAlarmId = this.result; };
+    navigator.mozAlarms.add(future, "ignoreTimezone", { timer: true });
 }
 
 function cancelSystemAlarm() {
-    localStorage.removeItem('squat_alarm_time');
-    localStorage.removeItem('squat_state');
-    if (navigator.mozAlarms && currentAlarmId) {
-        navigator.mozAlarms.remove(currentAlarmId);
-        currentAlarmId = null;
+    if (navigator.mozAlarms) {
+        var request = navigator.mozAlarms.getAll();
+        request.onsuccess = function() {
+            this.result.forEach(function(alarm) { navigator.mozAlarms.remove(alarm.id); });
+        };
     }
-}
-
-if (navigator.mozSetMessageHandler) {
-    navigator.mozSetMessageHandler('alarm', function (message) {
-        log("System Message Received: ALARM");
-        // Gaia Force: Ignore internal state, if alarm message comes, we alarm.
-        triggerAlarm();
-    });
 }
 
 function updateUI() {
@@ -196,308 +143,189 @@ function updateUI() {
     elTimer.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
     elCount.textContent = squatCount;
 
-    if (state === 'WORK') {
-        elFlipHint.className = isFlipped ? 'hidden' : 'small';
-        elStealth.className = isFlipped ? '' : 'hidden';
-    } else {
-        elStealth.className = 'hidden';
-        elFlipHint.className = 'hidden';
+    if (state === 'IDLE') {
+        elTitle.textContent = 'READY';
+        elFlipHint.textContent = 'SHAKE TO START';
+        document.getElementById('app').style.visibility = 'visible';
     }
     
-    if (state === 'ALARM') {
-        document.body.style.backgroundColor = (new Date().getSeconds() % 2 === 0) ? '#300' : '#1a1a1a';
-    } else {
-        document.body.style.backgroundColor = '#1a1a1a';
-    }
-}
-
-function logBioAtom() {
-    var sdcard = navigator.getDeviceStorage("sdcard");
-    var timestamp = new Date().getTime();
-    var bioAtom = {
-        header: {
-            identidad: "jesustdottk",
-            dimension: "salud",
-            tipo: "bio-atom",
-            timestamp: timestamp,
-            slug: "SQUAT-LOG-" + timestamp
-        },
-        metrics: {
-            squats: 10,
-            duration_sec: sessionMetric.duration / 1000,
-            max_g_force: sessionMetric.peak.toFixed(2)
-        },
-        environment: {
-            app: "SquatLockHub v2.3-PRECISE",
-            artifact: "ZTE Open (Inari)"
+    if (state === 'WORK') {
+        if (isFlipped) {
+            elStealth.className = '';
+            elTitle.textContent = ''; 
+        } else {
+            elStealth.className = 'hidden';
+            elTitle.textContent = 'FOCUS PAUSED';
+            elTimer.style.color = '#ff4141';
+            document.getElementById('app').style.visibility = 'visible';
         }
-    };
-    var blob = new Blob([JSON.stringify(bioAtom, null, 2)], {type: "application/json"});
-    var filename = "ZTE_BioLogs/bioatom_SQUAT-LOG-" + timestamp + ".json";
-    sdcard.addNamed(blob, filename);
+    } else {
+        elStealth.className = 'hidden';
+        elTimer.style.color = '#00FF41';
+        if (document.getElementById('app')) document.getElementById('app').style.visibility = 'visible';
+    }
+    
+    if (state === 'ALARM') document.body.style.backgroundColor = (new Date().getSeconds() % 2 === 0) ? '#300' : '#1a1a1a';
+    else if (state !== 'WORK') document.body.style.backgroundColor = '#1a1a1a';
 }
 
 function startWork() {
-    log("Starting WORK session...");
     state = 'WORK';
-    
-    // Reset timer
-    secondsLeft = SESSION_DURATION;
+    requestWakeLock('cpu');
     sessionEndTime = Date.now() + (secondsLeft * 1000);
-    
-    // Register Hardware Alarm (MozAlarms)
-    setSystemAlarm();
-    
-    // UI RECOVERY (Critical Force)
-    var appContainer = document.getElementById('app');
-    if (appContainer) appContainer.className = '';
-    
-    elTitle.textContent = 'WORK MODE';
+    if (isFlipped) setSystemAlarm();
+    document.getElementById('app').style.visibility = 'visible';
     elLock.className = 'hidden';
     elCounter.className = 'hidden';
     elTimer.className = '';
-    elBtn.style.display = 'none';
     
-    // Stop any persistent alarm
-    if (alarmInterval) clearInterval(alarmInterval);
-    alarmInterval = null;
-    
-    // Mario Start Theme
     playMarioStart();
-
-    sessionEndTime = Date.now() + (secondsLeft * 1000);
-    log("Session End: " + new Date(sessionEndTime).toLocaleTimeString());
-    
-    // UI Refresh Instant
     updateUI();
-    
+
     if (timer) clearInterval(timer);
-    timer = setInterval(function() {
-        if (isFlipped) {
-            requestWakeLock('cpu');
+    timer = setInterval(function () {
+        if (state === 'WORK' && isFlipped) {
             var now = Date.now();
             secondsLeft = Math.max(0, Math.ceil((sessionEndTime - now) / 1000));
             updateUI();
-            if (secondsLeft <= 0) {
-                clearInterval(timer);
-                triggerAlarm();
-            }
-        } else {
-            releaseWakeLock('cpu');
-            // If user turns phone, they pause the count, 
-            // but we MUST recalculate end session time later.
-            updateUI(); 
+            if (secondsLeft <= 0) { clearInterval(timer); triggerAlarm(); }
         }
     }, 1000);
 }
 
 function triggerAlarm() {
-    log("ALARM TRIGGERED");
+    if (state === 'ALARM') return;
+    log("ALARM!");
     state = 'ALARM';
     localStorage.setItem('squat_state', 'ALARM');
-    
-    elTitle.textContent = 'TIME EXPIRED!';
-    
-    // UI SECURITY: Hide the entire app container to prevent overlays
-    var appContainer = document.getElementById('app');
-    if (appContainer) appContainer.className = 'hidden';
-    
-    elLock.className = '';
-    elStealth.className = 'hidden'; 
-    
-    requestWakeLock('screen');
     requestWakeLock('cpu');
-    
+    requestWakeLock('screen');
+    document.getElementById('app').style.visibility = 'hidden';
+    elStealth.className = 'hidden';
+    elLock.className = '';
     if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500]);
     
-    // GAIA TRICK: Use the hidden audio element to activate 'alarm' channel priority
-    if (baitEl && typeof baitEl.play === 'function') {
-        baitEl.play(); // Gecko 32: play() doesn't return a Promise, no .catch()!
-    }
-    
-    // Programmable Hardware Orchestra
-    playMarioCastle();
-    
+    playCastleSequence();
     if (alarmInterval) clearInterval(alarmInterval);
-    alarmInterval = setInterval(playMarioCastle, 3000);
+    alarmInterval = setInterval(function() {
+        requestWakeLock('cpu');
+        playCastleSequence();
+    }, 2500);
 }
 
 function startCalibration() {
     state = 'CALIBRATION';
     calibrationCounter = 0;
+    document.getElementById('app').style.visibility = 'visible';
     elTitle.textContent = 'CALIBRATING...';
-    
-    // UI RECOVERY (Critical Force)
-    var appContainer = document.getElementById('app');
-    if (appContainer) appContainer.className = '';
-    
     elCalib.className = 'small';
     elCounter.className = 'hidden';
     elTimer.className = 'hidden';
-    elLock.className = 'hidden'; 
-    
-    // NOT clearing alarmInterval here (Keep Bowser playing during effort)
-    
-    playBeep(660, 0.2, 'sine');
-    log("Status: CALIBRATION. Lock Hidden.");
+    elLock.className = 'hidden';
+    if (alarmInterval) clearInterval(alarmInterval);
+    playCastleSequence();
+    alarmInterval = setInterval(playCastleSequence, 2500);
 }
 
 function startSquatMode() {
     state = 'SQUAT';
     squatCount = 10;
-    sessionMetric.start = new Date().getTime();
-    sessionMetric.peak = 0;
-    elTitle.textContent = 'SQUAT LOCK';
+    elTitle.textContent = 'SQUAT CHALLENGE';
     elCalib.className = 'small hidden';
     elCounter.className = '';
-    elLock.className = 'hidden'; // ASEGURAR DESBLOQUEO
     updateUI();
-    playBeep(880, 0.5, 'square');
-    log("Status: SQUAT. Reps: 10");
+    playBeep(880, 0.5);
 }
 
 function onMotion(e) {
     var a = e.accelerationIncludingGravity;
     if (!a || !a.z) return;
-
-    var magnitude = Math.sqrt(a.x*a.x + a.y*a.y + a.z*a.z);
+    var magnitude = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
     var wasFlipped = isFlipped;
-    isFlipped = (a.z < -8.0);
+    isFlipped = (a.z < -7.0); 
 
-    if (state === 'WORK' && isFlipped && !wasFlipped) {
-        // Paused time while UNFLIPPED needs to be added back to end time
-        sessionEndTime = Date.now() + (secondsLeft * 1000);
-        log("Resumed. Sync EndTime: " + new Date(sessionEndTime).toLocaleTimeString());
-        setSystemAlarm();
+    if (state === 'IDLE' && magnitude > 15) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        startCalibration();
+        return;
     }
 
-    if (state === 'ALARM' && !isFlipped && magnitude > 3) {
+    if (state === 'WORK') {
+        if (isFlipped && !wasFlipped) {
+            sessionEndTime = Date.now() + (secondsLeft * 1000);
+            setSystemAlarm();
+        } else if (!isFlipped && wasFlipped) {
+            cancelSystemAlarm();
+            updateUI();
+        }
+    }
+
+    if (state === 'ALARM' && magnitude > 15) {
         releaseWakeLock('screen');
+        if (alarmInterval) clearInterval(alarmInterval);
+        alarmInterval = null;
         startCalibration();
     }
 
     if (state === 'CALIBRATION') {
-        // LOOSENED TOLERANCE for 2013 hardware noise (7.0 - 13.0)
         if (magnitude > 7.0 && magnitude < 13.0) {
             calibrationCounter++;
-            if (calibrationCounter > 20) { // ~1 second for fluid handoff
-                startSquatMode();
-            }
-        } else {
-            calibrationCounter = 0;
-        }
+            if (calibrationCounter > 20) startSquatMode();
+        } else { calibrationCounter = 0; }
     }
 
     if (state === 'SQUAT') {
-        if (magnitude > sessionMetric.peak) sessionMetric.peak = magnitude;
-        
-        // REFINED Chest-Hold Thresholds (v2.5-SYNC from Lab)
-        if (motionState === 'STILL' && magnitude < 8.2) {
-            motionState = 'DOWN';
-        } else if (motionState === 'DOWN' && magnitude > 10.8) {
-            motionState = 'UP';
-        } else if (motionState === 'UP' && magnitude > 8.5 && magnitude < 11.5) {
+        if (motionState === 'STILL' && magnitude < 8.2) motionState = 'DOWN';
+        else if (motionState === 'DOWN' && magnitude > 10.8) motionState = 'UP';
+        else if (motionState === 'UP' && magnitude > 8.5 && magnitude < 11.5) {
             motionState = 'STILL';
             squatCount--;
             navigator.vibrate(100);
-            
-            // MARIO COIN SOUND (V3.6.0-GOLD)
-            playMarioCoin();
-            
-            log("Rep Detectada. Quedan: " + squatCount);
+            playMarioCoin(); 
             updateUI();
-            
             if (squatCount <= 0) {
-                // STOP BOWSER ALARM NOW
                 if (alarmInterval) clearInterval(alarmInterval);
                 alarmInterval = null;
-                
-                sessionMetric.duration = new Date().getTime() - sessionMetric.start;
                 state = 'FINISH';
                 elTitle.textContent = 'SQUATS DONE!';
                 elCounter.className = 'hidden';
-                elFlipHint.textContent = 'FLIP DOWN TO LOG & RESET';
-                elFlipHint.className = 'small';
-                // Mario Stage Clear Fanfare
                 playMarioStageClear();
             }
         }
     }
 
     if (state === 'FINISH' && isFlipped) {
-        logBioAtom();
-        log("Goal Reached! Resetting per Cycle logic...");
         localStorage.removeItem('squat_state');
         localStorage.removeItem('squat_alarm_time');
-        
-        releaseWakeLock('cpu');
         cancelSystemAlarm();
-        
-        // AUTO-CYCLE: Start next work session immediately
+        secondsLeft = SESSION_DURATION; 
         startWork();
-        
-        // Ensure UI displays correctly for next cycle
-        var appContainer = document.getElementById('app');
-        if (appContainer) appContainer.className = '';
     }
-    
-    // Smooth background blinking for alarm
-    if (state === 'ALARM') updateUI();
 }
 
-elBtn.addEventListener('click', function() {
-    log("Main Button Clicked. State: " + state);
-    if (state === 'IDLE') startWork();
-});
-
-// GAIA SURVIVOR LOGIC: Check for lost alarm on boot
 function checkPersistence() {
     var storedTime = localStorage.getItem('squat_alarm_time');
     var storedState = localStorage.getItem('squat_state');
-    
-    log("Persistence Check: Time=" + storedTime + " State=" + storedState);
-    
     if (storedTime && storedState) {
         var diff = parseInt(storedTime) - Date.now();
-        var oneHour = 60 * 60 * 1000;
-        
-        // AUTO-RECOVERY: If session is too old (> 1 hour), wipe it.
-        if (Math.abs(diff) > oneHour) {
-            log("Ghost Session detected (> 1hr). Wiping...");
-            localStorage.clear();
-            return;
-        }
-
-        if (storedState === 'WORK') {
-            if (diff <= 0) {
-                log("Survivor: Alarm was due. Triggering NOW.");
-                triggerAlarm();
-            } else {
-                log("Survivor: Resuming session (" + Math.ceil(diff/1000) + "s left)");
-                sessionEndTime = parseInt(storedTime);
-                secondsLeft = Math.ceil(diff/1000);
-                startWork();
-            }
-        } else if (storedState === 'ALARM') {
-            log("Survivor: Recovered from CRASH during ALARM.");
+        if (storedState === 'WORK' && diff > 0) {
+            sessionEndTime = parseInt(storedTime);
+            secondsLeft = Math.ceil(diff / 1000);
+            startWork();
+        } else if (storedState === 'ALARM' || (storedState === 'WORK' && diff <= 0)) {
             triggerAlarm();
         }
-    } else {
-        log("No pending session found. IDLE.");
     }
 }
 
-// RESET BUTTON LISTENER
 var elReset = document.getElementById('reset-btn');
 if (elReset) {
-    elReset.addEventListener('click', function() {
-        log("MANUAL RESET TRIGGERED. Wiping LocalStorage...");
+    elReset.addEventListener('click', function () {
         localStorage.clear();
         location.reload();
     });
 }
 
 window.addEventListener('devicemotion', onMotion);
-log("System Boot Complete.");
 checkPersistence();
 updateUI();
